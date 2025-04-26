@@ -1,0 +1,26 @@
+FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel
+
+# Install dependencies
+RUN apt-get update && apt-get install -y git && \
+    pip install packaging ninja psutil wheel
+
+# Set working directory
+WORKDIR /workspace
+
+# Set environment variables
+ENV FLASH_ATTENTION_FORCE_BUILD=TRUE
+ENV MAX_JOBS=4
+
+# Clone FlashAttention repository
+ARG FLASH_ATTENTION_VERSION=v2.7.4
+RUN git clone --branch ${FLASH_ATTENTION_VERSION} https://github.com/Dao-AILab/flash-attention.git repo
+
+# Build FlashAttention
+WORKDIR /workspace/repo
+RUN git config --global --add safe.directory /workspace/repo && \
+    git submodule update --init --recursive && \
+    python setup.py bdist_wheel
+
+# Output directory for the wheel
+VOLUME /workspace/wheel_output
+CMD cp dist/*.whl /workspace/wheel_output/

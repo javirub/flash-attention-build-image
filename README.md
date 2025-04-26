@@ -26,6 +26,12 @@ contains a partial list of places where FlashAttention is being used.
 FlashAttention and FlashAttention-2 are free to use and modify (see LICENSE).
 Please cite and credit FlashAttention if you use it.
 
+## Docker Images
+
+Pre-built Docker images with FlashAttention are available on Docker Hub. These images make it easy to use FlashAttention without having to build it from source.
+
+See [DOCKER.md](DOCKER.md) for more information on using and building the Docker images.
+
 
 ## FlashAttention-3 beta release
 FlashAttention-3 is optimized for Hopper GPUs (e.g. H100). 

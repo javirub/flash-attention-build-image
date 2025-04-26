@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # Service to build the FlashAttention wheel
+  build-wheel:
+    build:
+      context: .
+      dockerfile: Dockerfile.build
+      args:
+        FLASH_ATTENTION_VERSION: v2.7.4
+    volumes:
+      - ./wheel_output:/workspace/wheel_output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Service to create the runtime image
+  runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+      args:
+        WHEEL_FILE: ${WHEEL_FILE:-flash_attn-2.7.4-cp311-cp311-linux_x86_64.whl}
+    image: ${DOCKER_USERNAME:-javirub}/flashattention-pytorch:flashattn2.7.4-pytorch2.7.0-cuda12.8-cudnn9-runtime
+    volumes:
+      - ./examples:/app/examples
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
