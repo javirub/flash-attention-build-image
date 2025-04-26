@@ -1,0 +1,127 @@
+name: Update Latest Compiled Branch
+
+on:
+  schedule:
+    # Check for new releases daily at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      flash_attention_version:
+        description: 'FlashAttention version tag (e.g., v2.7.4)'
+        required: false
+        default: ''
+
+jobs:
+  check-for-new-release:
+    runs-on: ubuntu-latest
+    outputs:
+      new_release: ${{ steps.check-release.outputs.new_release }}
+      latest_version: ${{ steps.check-release.outputs.latest_version }}
+    steps:
+      - name: Check for new FlashAttention release
+        id: check-release
+        run: |
+          if [ -n "${{ github.event.inputs.flash_attention_version }}" ]; then
+            echo "Using manually specified version: ${{ github.event.inputs.flash_attention_version }}"
+            echo "new_release=true" >> $GITHUB_OUTPUT
+            echo "latest_version=${{ github.event.inputs.flash_attention_version }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Get the latest release from GitHub API
+          LATEST_RELEASE=$(curl -s https://api.github.com/repos/Dao-AILab/flash-attention/releases/latest | jq -r .tag_name)
+          echo "Latest FlashAttention release: $LATEST_RELEASE"
+
+          # Get the current version in our latest_compiled branch
+          git clone --branch latest_compiled https://github.com/${{ github.repository }}.git repo
+          cd repo
+          CURRENT_VERSION=$(grep -o 'FLASH_ATTENTION_VERSION=v[0-9.]*' Dockerfile.build | cut -d= -f2)
+          echo "Current version in latest_compiled branch: $CURRENT_VERSION"
+
+          if [ "$LATEST_RELEASE" = "$CURRENT_VERSION" ]; then
+            echo "Already at the latest version. Skipping update."
+            echo "new_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "New release detected: $LATEST_RELEASE"
+            echo "new_release=true" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+          fi
+
+  update-branch:
+    needs: check-for-new-release
+    if: ${{ needs.check-for-new-release.outputs.new_release == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest_compiled branch
+        uses: actions/checkout@v3
+        with:
+          ref: latest_compiled
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/Dao-AILab/flash-attention.git
+          git fetch upstream --tags
+
+      - name: Update from upstream
+        run: |
+          # Get the latest version
+          LATEST_VERSION="${{ needs.check-for-new-release.outputs.latest_version }}"
+
+          # Create a temporary branch
+          git checkout -b temp-update-branch
+
+          # Fetch the specific tag from upstream
+          git fetch upstream $LATEST_VERSION
+
+          # Create a list of files to preserve (our custom files)
+          cat > .gitpreserve << EOF
+          .github/workflows/build-and-publish.yml
+          .github/workflows/update-latest-compiled.yml
+          DOCKER.md
+          Dockerfile.build
+          Dockerfile.runtime
+          docker-compose.yml
+          examples/simple_attention.py
+          reset_branch.sh
+          EOF
+
+          # Backup our custom files
+          mkdir -p backup
+          while read file; do
+            mkdir -p backup/$(dirname "$file")
+            cp "$file" "backup/$file" 2>/dev/null || true
+          done < .gitpreserve
+
+          # Reset to the upstream tag
+          git reset --hard upstream/$LATEST_VERSION
+
+          # Restore our custom files
+          while read file; do
+            if [ -f "backup/$file" ]; then
+              mkdir -p $(dirname "$file")
+              cp "backup/$file" "$file"
+            fi
+          done < .gitpreserve
+
+          # Update version in Dockerfile.build
+          sed -i "s/ARG FLASH_ATTENTION_VERSION=.*/ARG FLASH_ATTENTION_VERSION=$LATEST_VERSION/" Dockerfile.build
+
+          # Commit changes
+          git add .
+          git commit -m "Update to FlashAttention $LATEST_VERSION"
+
+          # Push to latest_compiled branch
+          git push origin temp-update-branch:latest_compiled
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf backup
+          rm -f .gitpreserve

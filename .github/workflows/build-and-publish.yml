@@ -1,0 +1,132 @@
+name: Build and Publish FlashAttention Docker Image
+
+on:
+  schedule:
+    # Check for new releases daily at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      flash_attention_version:
+        description: 'FlashAttention version tag (e.g., v2.7.4)'
+        required: false
+        default: ''
+      pytorch_version:
+        description: 'PyTorch version (e.g., 2.7.0)'
+        required: false
+        default: '2.7.0'
+      cuda_version:
+        description: 'CUDA version (e.g., 12.8)'
+        required: false
+        default: '12.8'
+
+jobs:
+  check-for-new-release:
+    runs-on: ubuntu-latest
+    outputs:
+      new_release: ${{ steps.check-release.outputs.new_release }}
+      latest_version: ${{ steps.check-release.outputs.latest_version }}
+      pytorch_version: ${{ steps.set-versions.outputs.pytorch_version }}
+      cuda_version: ${{ steps.set-versions.outputs.cuda_version }}
+    steps:
+      - name: Set versions
+        id: set-versions
+        run: |
+          if [ -n "${{ github.event.inputs.flash_attention_version }}" ]; then
+            echo "Using manually specified versions"
+            echo "pytorch_version=${{ github.event.inputs.pytorch_version }}" >> $GITHUB_OUTPUT
+            echo "cuda_version=${{ github.event.inputs.cuda_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "Using default versions"
+            echo "pytorch_version=2.7.0" >> $GITHUB_OUTPUT
+            echo "cuda_version=12.8" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for new FlashAttention release
+        id: check-release
+        run: |
+          if [ -n "${{ github.event.inputs.flash_attention_version }}" ]; then
+            echo "Using manually specified version: ${{ github.event.inputs.flash_attention_version }}"
+            echo "new_release=true" >> $GITHUB_OUTPUT
+            echo "latest_version=${{ github.event.inputs.flash_attention_version }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Get the latest release from GitHub API
+          LATEST_RELEASE=$(curl -s https://api.github.com/repos/Dao-AILab/flash-attention/releases/latest | jq -r .tag_name)
+          echo "Latest FlashAttention release: $LATEST_RELEASE"
+
+          # Check if we've already built this version
+          DOCKERHUB_TAGS=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME || 'javirub' }}/flashattention-pytorch/tags/" | jq -r '.results[].name')
+          
+          if echo "$DOCKERHUB_TAGS" | grep -q "flashattn${LATEST_RELEASE#v}-pytorch${{ steps.set-versions.outputs.pytorch_version }}-cuda${{ steps.set-versions.outputs.cuda_version }}"; then
+            echo "Image for $LATEST_RELEASE already exists. Skipping build."
+            echo "new_release=false" >> $GITHUB_OUTPUT
+          else
+            echo "New release detected: $LATEST_RELEASE"
+            echo "new_release=true" >> $GITHUB_OUTPUT
+            echo "latest_version=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+          fi
+
+  build-and-publish:
+    needs: check-for-new-release
+    if: ${{ needs.check-for-new-release.outputs.new_release == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME || 'javirub' }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract FlashAttention version
+        id: extract-version
+        run: |
+          VERSION="${{ needs.check-for-new-release.outputs.latest_version }}"
+          VERSION_NO_V="${VERSION#v}"
+          echo "flash_version=$VERSION" >> $GITHUB_OUTPUT
+          echo "flash_version_no_v=$VERSION_NO_V" >> $GITHUB_OUTPUT
+          echo "pytorch_version=${{ needs.check-for-new-release.outputs.pytorch_version }}" >> $GITHUB_OUTPUT
+          echo "cuda_version=${{ needs.check-for-new-release.outputs.cuda_version }}" >> $GITHUB_OUTPUT
+
+      - name: Build wheel image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile.build
+          push: false
+          load: true
+          tags: flashattention-wheel-builder:latest
+          build-args: |
+            FLASH_ATTENTION_VERSION=${{ steps.extract-version.outputs.flash_version }}
+
+      - name: Create wheel output directory
+        run: mkdir -p wheel_output
+
+      - name: Extract wheel
+        run: |
+          docker run --rm -v $(pwd)/wheel_output:/workspace/wheel_output flashattention-wheel-builder:latest
+
+      - name: Get wheel filename
+        id: get-wheel
+        run: |
+          WHEEL_FILE=$(ls wheel_output/*.whl | head -n 1)
+          echo "wheel_file=$(basename $WHEEL_FILE)" >> $GITHUB_OUTPUT
+          echo "Found wheel file: $(basename $WHEEL_FILE)"
+
+      - name: Build and push runtime image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./Dockerfile.runtime
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME || 'javirub' }}/flashattention-pytorch:flashattn${{ steps.extract-version.outputs.flash_version_no_v }}-pytorch${{ steps.extract-version.outputs.pytorch_version }}-cuda${{ steps.extract-version.outputs.cuda_version }}-cudnn9-runtime
+            ${{ secrets.DOCKER_USERNAME || 'javirub' }}/flashattention-pytorch:latest
+          build-args: |
+            WHEEL_FILE=${{ steps.get-wheel.outputs.wheel_file }}

@@ -1,0 +1,15 @@
+FROM pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime
+
+# Set working directory
+WORKDIR /app
+
+# Copy the wheel file (this will be done at build time)
+ARG WHEEL_FILE=flash_attn-2.7.4-cp311-cp311-linux_x86_64.whl
+COPY ${WHEEL_FILE} /tmp/
+
+# Install the wheel
+RUN pip install /tmp/${WHEEL_FILE} && \
+    rm /tmp/${WHEEL_FILE}
+
+# Default command
+CMD ["/bin/bash"]
