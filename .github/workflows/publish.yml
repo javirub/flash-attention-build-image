@@ -32,10 +32,27 @@ jobs:
           tag_name: ${{ steps.extract_branch.outputs.branch }}
           release_name: ${{ steps.extract_branch.outputs.branch }}
 
+  trigger_build_wheels:
+    name: Trigger Build Wheel on Self-Hosted Runner
+    needs: setup_release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the tag version
+        id: extract_branch
+        run: echo ::set-output name=branch::${GITHUB_REF#refs/tags/}
+        shell: bash
+
+      - name: Trigger self-hosted runner workflow
+        run: |
+          echo "Triggering build on self-hosted runner for tag ${{ steps.extract_branch.outputs.branch }}"
+          # This is a placeholder for the actual trigger mechanism
+          # In a real implementation, this could be a webhook, API call, or other mechanism
+          # to trigger the self-hosted runner
+
   build_wheels:
     name: Build Wheel
-    needs: setup_release
-    runs-on: ${{ matrix.os }}
+    needs: trigger_build_wheels
+    runs-on: self-hosted
 
     strategy:
       fail-fast: false
@@ -187,7 +204,7 @@ jobs:
     name: Publish package
     needs: [build_wheels]
 
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
       - uses: actions/checkout@v4
