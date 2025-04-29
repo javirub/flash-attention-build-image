@@ -57,7 +57,7 @@ jobs:
 
           # Check if we've already built this version
           DOCKERHUB_TAGS=$(curl -s "https://hub.docker.com/v2/repositories/${{ secrets.DOCKER_USERNAME || 'javirub' }}/flashattention-pytorch/tags/" | jq -r '.results[].name')
-          
+
           if echo "$DOCKERHUB_TAGS" | grep -q "flashattn${LATEST_RELEASE#v}-pytorch${{ steps.set-versions.outputs.pytorch_version }}-cuda${{ steps.set-versions.outputs.cuda_version }}"; then
             echo "Image for $LATEST_RELEASE already exists. Skipping build."
             echo "new_release=false" >> $GITHUB_OUTPUT
@@ -67,10 +67,22 @@ jobs:
             echo "latest_version=$LATEST_RELEASE" >> $GITHUB_OUTPUT
           fi
 
-  build-and-publish:
+  trigger-build-and-publish:
     needs: check-for-new-release
     if: ${{ needs.check-for-new-release.outputs.new_release == 'true' }}
     runs-on: ubuntu-latest
+    steps:
+      - name: Trigger self-hosted runner workflow
+        run: |
+          echo "Triggering build on self-hosted runner for version ${{ needs.check-for-new-release.outputs.latest_version }}"
+          # This is a placeholder for the actual trigger mechanism
+          # In a real implementation, this could be a webhook, API call, or other mechanism
+          # to trigger the self-hosted runner
+
+  build-and-publish:
+    needs: trigger-build-and-publish
+    if: ${{ needs.check-for-new-release.outputs.new_release == 'true' }}
+    runs-on: self-hosted
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
